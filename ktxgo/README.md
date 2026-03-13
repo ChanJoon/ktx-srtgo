@@ -95,7 +95,7 @@ python3 -m ktxgo \
 | `--arrival` | 부산 | 도착역 |
 | `--date` | 현재+10분 기준 | 출발일 (YYYYMMDD) |
 | `--time` | 현재+10분 기준 | 출발 시간대 (HH) |
-| `--interactive` / `--no-interactive` | TTY에서 interactive | 날짜/시간/열차 선택 프롬프트 사용 여부 |
+| `--interactive` / `--no-interactive` | TTY에서 interactive | 날짜/시간/열차 선택 프롬프트 사용 여부. interactive에서는 `KTX만` / `KTX + ITX/무궁화 등` 프리셋 제공 |
 | `--train-type` | `ktx` | 반복 지정 가능. `ktx`, `itx-saemaeul`, `mugunghwa`, `tonggeun`, `itx-cheongchun`, `airport`, `legacy-all` (`saemaeul`, `nuriro` alias 지원) |
 | `--seat` | any | `general` / `special` / `any` / `standing` |
 | `--headless` / `--no-headless` | headless | 브라우저 표시 여부 |
@@ -123,7 +123,7 @@ python3 -m ktxgo \
  ├─ (interactive 모드) 시작 메뉴
  │   ├─ 카드 등록/수정
  │   └─ 예매 시작
- │      ├─ 출발/도착/날짜/시간/열차 종류 입력
+ │      ├─ 출발/도착/날짜/시간/조회 열차 범위(`KTX만` / `KTX + ITX/무궁화 등`) 입력
  │      ├─ 초기 조회 결과에서 예약 시도할 열차 선택 (다중선택 가능)
  │      └─ 좌석 선호 + 자동결제 여부 + 스마트티켓 발권 여부 확인
  │

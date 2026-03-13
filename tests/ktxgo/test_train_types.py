@@ -139,6 +139,73 @@ def test_normalize_train_types_expands_aliases() -> None:
     )
 
 
+def test_interactive_train_scope_from_types() -> None:
+    assert cli._interactive_train_scope_from_types(("ktx",)) == "ktx_only"
+    assert (
+        cli._interactive_train_scope_from_types(
+            ("ktx", "itx-saemaeul", "mugunghwa")
+        )
+        == "ktx_plus_general"
+    )
+
+
+def test_train_types_from_interactive_scope() -> None:
+    assert cli._train_types_from_interactive_scope("ktx_only") == ("ktx",)
+    assert cli._train_types_from_interactive_scope("ktx_plus_general") == (
+        "ktx",
+        "itx-saemaeul",
+        "mugunghwa",
+        "tonggeun",
+        "itx-cheongchun",
+        "airport",
+    )
+
+
+def test_interactive_train_scope_label_uses_itx_wording() -> None:
+    assert (
+        ("KTX + ITX/무궁화 등", "ktx_plus_general")
+        in cli._INTERACTIVE_TRAIN_SCOPE_CHOICES
+    )
+
+
+def test_prompt_conditions_uses_train_scope_preset(monkeypatch) -> None:
+    captured_names: list[str] = []
+
+    def fake_prompt(questions: list[object]) -> dict[str, object]:
+        captured_names.extend(question.name for question in questions)
+        return {
+            "departure": "서울",
+            "arrival": "부산",
+            "date": "20260320",
+            "time": "07",
+            "adults": 1,
+            "train_scope": "ktx_plus_general",
+        }
+
+    monkeypatch.setattr(cli, "_prompt_guarded", fake_prompt)
+
+    result = cli._prompt_conditions(
+        "서울",
+        "부산",
+        "20260320",
+        "07",
+        1,
+        ["서울", "부산"],
+        ("ktx",),
+    )
+
+    assert "train_scope" in captured_names
+    assert "train_types" not in captured_names
+    assert result[-1] == (
+        "ktx",
+        "itx-saemaeul",
+        "mugunghwa",
+        "tonggeun",
+        "itx-cheongchun",
+        "airport",
+    )
+
+
 def test_format_train_type_normalizes_display_names() -> None:
     assert cli._format_train_type(_make_train(train_type="KTX")) == "KTX"
     assert cli._format_train_type(_make_train(train_type="ITX-새마을", train_group="101")) == "ITX-새마을"

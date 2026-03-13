@@ -39,6 +39,12 @@ except ImportError:  # pragma: no cover - non-POSIX platforms
 
 # Session-expired error codes returned by Korail.
 _SESSION_EXPIRED_CODES = {"P058", "WRT300004", "WRD000003"}
+_INTERACTIVE_SCOPE_KTX_ONLY = "ktx_only"
+_INTERACTIVE_SCOPE_KTX_PLUS_GENERAL = "ktx_plus_general"
+_INTERACTIVE_TRAIN_SCOPE_CHOICES = [
+    ("KTX만", _INTERACTIVE_SCOPE_KTX_ONLY),
+    ("KTX + ITX/무궁화 등", _INTERACTIVE_SCOPE_KTX_PLUS_GENERAL),
+]
 
 TrainKey = tuple[str, str, str, str, str]
 ReservationPlan = tuple[str, bool]  # (seat_type, waitlist)
@@ -104,6 +110,19 @@ def _validate_adults(value: int) -> int:
 
 def _normalize_train_types(train_types: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
     return normalize_train_types(train_types)
+
+
+def _train_types_from_interactive_scope(scope: str) -> tuple[str, ...]:
+    if scope == _INTERACTIVE_SCOPE_KTX_ONLY:
+        return (DEFAULT_TRAIN_TYPES[0],)
+    return _normalize_train_types(("legacy-all",))
+
+
+def _interactive_train_scope_from_types(train_types: tuple[str, ...] | list[str] | None) -> str:
+    normalized = _normalize_train_types(train_types)
+    if normalized == DEFAULT_TRAIN_TYPES:
+        return _INTERACTIVE_SCOPE_KTX_ONLY
+    return _INTERACTIVE_SCOPE_KTX_PLUS_GENERAL
 
 
 def _format_train_type(train: Train) -> str:
@@ -555,10 +574,6 @@ def _prompt_conditions(
 
     time_choices = [(f"{hour:02d}시", f"{hour:02d}") for hour in range(24)]
     adult_choices = [(f"{count}명", count) for count in range(1, 10)]
-    train_type_choices = [
-        (TRAIN_TYPE_LABEL_BY_NAME[train_type], train_type)
-        for train_type in TRAIN_TYPE_LABEL_BY_NAME
-    ]
     while True:
         info = _prompt_guarded(
             [
@@ -592,11 +607,11 @@ def _prompt_conditions(
                     choices=adult_choices,
                     default=adults,
                 ),
-                inquirer.Checkbox(
-                    "train_types",
-                    message="열차 종류 선택 (Space:선택, Enter:완료, Ctrl-C:취소)",
-                    choices=train_type_choices,
-                    default=list(train_types),
+                inquirer.List(
+                    "train_scope",
+                    message="조회 열차 범위 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
+                    choices=_INTERACTIVE_TRAIN_SCOPE_CHOICES,
+                    default=_interactive_train_scope_from_types(train_types),
                 ),
             ]
         )
@@ -614,8 +629,13 @@ def _prompt_conditions(
         time_str = _validate_hour(str(info["time"]))
         adults_raw = info.get("adults", adults)
         adults = _validate_adults(int(str(adults_raw)))
-        selected_train_types = _normalize_train_types(
-            cast(list[str], info.get("train_types", list(train_types)))
+        selected_train_types = _train_types_from_interactive_scope(
+            str(
+                info.get(
+                    "train_scope",
+                    _interactive_train_scope_from_types(train_types),
+                )
+            )
         )
         return departure, arrival, date, time_str, adults, selected_train_types
 
