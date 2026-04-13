@@ -11,6 +11,7 @@ from typing import cast
 import click
 import inquirer
 import keyring
+from click.core import ParameterSource
 from termcolor import colored
 
 from srtgo.keyring_bootstrap import configure_keyring_backend
@@ -50,6 +51,10 @@ TrainKey = tuple[str, str, str, str, str]
 ReservationPlan = tuple[str, bool]  # (seat_type, waitlist)
 _PROMPT_INPUT_GUARD_S = 0.18
 _LAST_PROMPT_FINISHED_AT: float | None = None
+_INTERACTIVE_DEFAULT_SERVICE = "KTX"
+_INTERACTIVE_BOOL_TRUE_VALUES = {"1", "true", "yes", "y", "on"}
+_INTERACTIVE_BOOL_FALSE_VALUES = {"0", "false", "no", "n", "off"}
+_INTERACTIVE_SEAT_CHOICES = {"general", "special", "any", "standing"}
 
 
 def _fmt_date() -> str:
@@ -106,6 +111,193 @@ def _validate_adults(value: int) -> int:
     if value < 1 or value > 9:
         raise click.BadParameter("adults must be between 1 and 9")
     return value
+
+
+def _load_interactive_default(key: str) -> str | None:
+    return keyring.get_password(_INTERACTIVE_DEFAULT_SERVICE, key)
+
+
+def _save_interactive_default(key: str, value: object) -> None:
+    if key == "train_types":
+        serialized = ",".join(
+            _normalize_train_types(cast(tuple[str, ...] | list[str] | None, value))
+        )
+    elif key in {"auto_pay", "smart_ticket"}:
+        serialized = "1" if bool(value) else "0"
+    else:
+        serialized = str(value)
+    keyring.set_password(_INTERACTIVE_DEFAULT_SERVICE, key, serialized)
+
+
+def _sanitize_saved_station(
+    value: str | None, stations: list[str], fallback: str
+) -> str:
+    candidate = str(value or "").strip()
+    if candidate in stations:
+        return candidate
+    return fallback
+
+
+def _sanitize_saved_date(value: str | None, fallback: str) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return fallback
+    try:
+        return _validate_date(candidate)
+    except click.BadParameter:
+        return fallback
+
+
+def _sanitize_saved_time(value: str | None, fallback: str) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return fallback
+    try:
+        return _validate_hour(candidate)
+    except click.BadParameter:
+        return fallback
+
+
+def _sanitize_saved_adults(value: str | None, fallback: int) -> int:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return fallback
+    try:
+        return _validate_adults(int(candidate))
+    except (TypeError, ValueError, click.BadParameter):
+        return fallback
+
+
+def _sanitize_saved_train_types(
+    value: str | None, fallback: tuple[str, ...]
+) -> tuple[str, ...]:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return fallback
+    try:
+        return _normalize_train_types(
+            tuple(part.strip() for part in candidate.split(",") if part.strip())
+        )
+    except ValueError:
+        return fallback
+
+
+def _sanitize_saved_seat(value: str | None, fallback: str) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in _INTERACTIVE_SEAT_CHOICES:
+        return candidate
+    return fallback
+
+
+def _sanitize_saved_bool(value: str | None, fallback: bool) -> bool:
+    candidate = str(value or "").strip().lower()
+    if candidate in _INTERACTIVE_BOOL_TRUE_VALUES:
+        return True
+    if candidate in _INTERACTIVE_BOOL_FALSE_VALUES:
+        return False
+    return fallback
+
+
+def _load_saved_interactive_reservation_defaults(
+    *,
+    stations: list[str],
+    departure: str,
+    arrival: str,
+    date: str,
+    time_str: str,
+    adults: int,
+    train_types: tuple[str, ...],
+    seat: str,
+    auto_pay: bool,
+    smart_ticket: bool,
+) -> tuple[str, str, str, str, int, tuple[str, ...], str, bool, bool]:
+    saved_departure = _sanitize_saved_station(
+        _load_interactive_default("departure"), stations, departure
+    )
+    saved_arrival = _sanitize_saved_station(
+        _load_interactive_default("arrival"), stations, arrival
+    )
+    if saved_departure == saved_arrival and len(stations) > 1:
+        saved_arrival = next(
+            (station for station in stations if station != saved_departure), arrival
+        )
+
+    return (
+        saved_departure,
+        saved_arrival,
+        _sanitize_saved_date(_load_interactive_default("date"), date),
+        _sanitize_saved_time(_load_interactive_default("time"), time_str),
+        _sanitize_saved_adults(_load_interactive_default("adults"), adults),
+        _sanitize_saved_train_types(
+            _load_interactive_default("train_types"), train_types
+        ),
+        _sanitize_saved_seat(_load_interactive_default("seat"), seat),
+        _sanitize_saved_bool(_load_interactive_default("auto_pay"), auto_pay),
+        smart_ticket,
+    )
+
+
+def _should_apply_saved_interactive_default(
+    ctx: click.Context | None, param_name: str
+) -> bool:
+    if ctx is None:
+        return False
+    source = ctx.get_parameter_source(param_name)
+    return source is ParameterSource.DEFAULT
+
+
+def _apply_saved_interactive_reservation_defaults(
+    ctx: click.Context | None,
+    *,
+    stations: list[str],
+    departure: str,
+    arrival: str,
+    date: str,
+    time_str: str,
+    adults: int,
+    train_types: tuple[str, ...],
+    seat: str,
+    auto_pay: bool,
+    smart_ticket: bool,
+) -> tuple[str, str, str, str, int, tuple[str, ...], str, bool, bool]:
+    saved_defaults = _load_saved_interactive_reservation_defaults(
+        stations=stations,
+        departure=departure,
+        arrival=arrival,
+        date=date,
+        time_str=time_str,
+        adults=adults,
+        train_types=train_types,
+        seat=seat,
+        auto_pay=auto_pay,
+        smart_ticket=smart_ticket,
+    )
+    merged = {
+        "departure": departure,
+        "arrival": arrival,
+        "date": date,
+        "time_str": time_str,
+        "adults": adults,
+        "train_types": train_types,
+        "seat": seat,
+        "auto_pay": auto_pay,
+        "smart_ticket": smart_ticket,
+    }
+    for key, saved_value in zip(merged.keys(), saved_defaults):
+        if _should_apply_saved_interactive_default(ctx, key):
+            merged[key] = saved_value
+
+    return (
+        cast(str, merged["departure"]),
+        cast(str, merged["arrival"]),
+        cast(str, merged["date"]),
+        cast(str, merged["time_str"]),
+        cast(int, merged["adults"]),
+        cast(tuple[str, ...], merged["train_types"]),
+        cast(str, merged["seat"]),
+        cast(bool, merged["auto_pay"]),
+        cast(bool, merged["smart_ticket"]),
+    )
 
 
 def _normalize_train_types(
@@ -245,6 +437,16 @@ def _prompt_guarded(questions: list[object]) -> dict[str, object] | None:
         return inquirer.prompt(questions)
     finally:
         _finish_tty_prompt()
+
+
+def _prompt_required_value(
+    key: str, question: object, *, cancel_message: str
+) -> object:
+    answer = _prompt_guarded([question])
+    if answer is None:
+        click.echo(cancel_message)
+        sys.exit(0)
+    return answer.get(key)
 
 
 def _train_choice_label(idx: int, train: Train) -> str:
@@ -614,70 +816,115 @@ def _prompt_conditions(
 
     time_choices = [(f"{hour:02d}시", f"{hour:02d}") for hour in range(24)]
     adult_choices = [(f"{count}명", count) for count in range(1, 10)]
-    while True:
-        info = _prompt_guarded(
-            [
+
+    departure = _normalize_station(
+        str(
+            _prompt_required_value(
+                "departure",
                 inquirer.List(
                     "departure",
                     message="출발역 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
                     choices=stations,
                     default=departure,
                 ),
-                inquirer.List(
+                cancel_message="예매 정보 입력 중 취소되었습니다.",
+            )
+        )
+    )
+    _save_interactive_default("departure", departure)
+
+    while True:
+        arrival_default = arrival
+        if arrival_default == departure and len(stations) > 1:
+            arrival_default = next(
+                (station for station in stations if station != departure), stations[0]
+            )
+        arrival = _normalize_station(
+            str(
+                _prompt_required_value(
                     "arrival",
-                    message="도착역 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
-                    choices=stations,
-                    default=arrival,
-                ),
+                    inquirer.List(
+                        "arrival",
+                        message="도착역 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
+                        choices=stations,
+                        default=arrival_default,
+                    ),
+                    cancel_message="예매 정보 입력 중 취소되었습니다.",
+                )
+            )
+        )
+        if departure == arrival:
+            click.echo("입력 오류: 출발역과 도착역은 달라야 합니다.")
+            continue
+        _save_interactive_default("arrival", arrival)
+        break
+
+    date = _validate_date(
+        str(
+            _prompt_required_value(
+                "date",
                 inquirer.List(
                     "date",
                     message="출발일 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
                     choices=date_choices,
                     default=date,
                 ),
+                cancel_message="예매 정보 입력 중 취소되었습니다.",
+            )
+        )
+    )
+    _save_interactive_default("date", date)
+
+    time_str = _validate_hour(
+        str(
+            _prompt_required_value(
+                "time",
                 inquirer.List(
                     "time",
                     message="출발 시각 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
                     choices=time_choices,
                     default=time_str,
                 ),
-                inquirer.List(
+                cancel_message="예매 정보 입력 중 취소되었습니다.",
+            )
+        )
+    )
+    _save_interactive_default("time", time_str)
+
+    adults = _validate_adults(
+        int(
+            str(
+                _prompt_required_value(
                     "adults",
-                    message="인원수 선택 (성인, ↕:이동, Enter: 선택, Ctrl-C: 취소)",
-                    choices=adult_choices,
-                    default=adults,
-                ),
+                    inquirer.List(
+                        "adults",
+                        message="인원수 선택 (성인, ↕:이동, Enter: 선택, Ctrl-C: 취소)",
+                        choices=adult_choices,
+                        default=adults,
+                    ),
+                    cancel_message="예매 정보 입력 중 취소되었습니다.",
+                )
+            )
+        )
+    )
+    _save_interactive_default("adults", adults)
+
+    selected_train_types = _train_types_from_interactive_scope(
+        str(
+            _prompt_required_value(
+                "train_scope",
                 inquirer.List(
                     "train_scope",
                     message="조회 열차 범위 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
                     choices=_INTERACTIVE_TRAIN_SCOPE_CHOICES,
                     default=_interactive_train_scope_from_types(train_types),
                 ),
-            ]
-        )
-        if not info:
-            click.echo("예매 정보 입력 중 취소되었습니다.")
-            sys.exit(0)
-
-        departure = _normalize_station(str(info["departure"]))
-        arrival = _normalize_station(str(info["arrival"]))
-        if departure == arrival:
-            click.echo("입력 오류: 출발역과 도착역은 달라야 합니다.")
-            continue
-
-        date = _validate_date(str(info["date"]))
-        time_str = _validate_hour(str(info["time"]))
-        adults_raw = info.get("adults", adults)
-        adults = _validate_adults(int(str(adults_raw)))
-        selected_train_types = _train_types_from_interactive_scope(
-            str(
-                info.get(
-                    "train_scope",
-                    _interactive_train_scope_from_types(train_types),
-                )
+                cancel_message="예매 정보 입력 중 취소되었습니다.",
             )
         )
-        return departure, arrival, date, time_str, adults, selected_train_types
+    )
+    _save_interactive_default("train_types", selected_train_types)
+    return departure, arrival, date, time_str, adults, selected_train_types
 
 
 def _prompt_target_trains(
@@ -754,32 +1001,38 @@ def _prompt_reservation_options(
         ("입석/자유석", "standing"),
     ]
 
-    choice = _prompt_guarded(
-        [
-            inquirer.List(
+    seat = _sanitize_saved_seat(
+        str(
+            _prompt_required_value(
                 "seat",
-                message="좌석 선호 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
-                choices=seat_choices,
-                default=default_seat,
-            ),
+                inquirer.List(
+                    "seat",
+                    message="좌석 선호 선택 (↕:이동, Enter: 선택, Ctrl-C: 취소)",
+                    choices=seat_choices,
+                    default=default_seat,
+                ),
+                cancel_message="예매 옵션 입력 중 취소되었습니다.",
+            )
+        ),
+        default_seat,
+    )
+    _save_interactive_default("seat", seat)
+
+    auto_pay = bool(
+        _prompt_required_value(
+            "auto_pay",
             inquirer.Confirm(
                 "auto_pay",
                 message="예매 성공 시 카드 자동결제",
                 default=default_auto_pay,
             ),
-        ]
+            cancel_message="예매 옵션 입력 중 취소되었습니다.",
+        )
     )
-    if choice is None:
-        click.echo("예매 옵션 입력 중 취소되었습니다.")
-        sys.exit(0)
-
-    seat = str(choice.get("seat", default_seat))
-    auto_pay = bool(choice.get("auto_pay", False))
-    if not auto_pay:
-        return seat, False, default_smart_ticket
+    _save_interactive_default("auto_pay", auto_pay)
 
     # Keep smart-ticket behavior as a default/CLI setting without asking in TTY.
-    return seat, True, default_smart_ticket
+    return seat, auto_pay, default_smart_ticket
 
 
 def _resolve_targets(
@@ -1069,7 +1322,7 @@ def _ensure_login(api: KorailAPI, manager: BrowserManager, headless: bool) -> Ko
             click.echo(f"[{_now()}] 로그인 정보 자동입력 완료 ({masked_id}).")
             click.echo(
                 colored(
-                    "[로그인 필요] 비밀번호 칸을 한 번 클릭한 뒤 회원번호 마지막에 Space 키를 입력하고 로그인 버튼을 직접 눌러주세요.",
+                    "[로그인 필요] 자동으로 접속된 브라우저에서 로그인 버튼을 직접 눌러주세요",
                     "white",
                     "on_red",
                     attrs=["bold"],
@@ -1425,6 +1678,30 @@ def main(
         raise click.UsageError("--interactive requires a TTY")
     visible_stations = _load_visible_stations()
     if interactive_mode:
+        ctx = click.get_current_context(silent=True)
+        (
+            departure,
+            arrival,
+            date,
+            time_str,
+            adults,
+            train_types,
+            seat,
+            auto_pay,
+            smart_ticket,
+        ) = _apply_saved_interactive_reservation_defaults(
+            ctx,
+            stations=visible_stations,
+            departure=departure,
+            arrival=arrival,
+            date=date,
+            time_str=time_str,
+            adults=adults,
+            train_types=train_types,
+            seat=seat,
+            auto_pay=auto_pay,
+            smart_ticket=smart_ticket,
+        )
         while True:
             action = _prompt_main_menu()
             if action == "reserve":
@@ -1500,6 +1777,7 @@ def main(
             if auto_pay and not _ensure_card_for_auto_pay():
                 if click.confirm("자동결제 없이 계속 진행할까요?", default=True):
                     auto_pay = False
+                    _save_interactive_default("auto_pay", auto_pay)
                 else:
                     sys.exit(0)
 

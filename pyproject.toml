@@ -15,7 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "click",
+    "click>=8",
     "curl_cffi",
     "requests",
     "inquirer>=3.4",
